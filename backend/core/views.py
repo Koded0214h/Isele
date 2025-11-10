@@ -6,9 +6,13 @@ from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
 import os
 import json
+import logging
 from .models import EventManagerUser, Event
+from .event_creator import EventCreationService
 from datetime import datetime, timedelta
 import re
+
+logger = logging.getLogger(__name__)
 
 # Initialize Twilio client
 twilio_client = Client(os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN'))
@@ -20,13 +24,17 @@ def whatsapp_webhook(request):
     try:
         # Get the incoming message details
         from_number = request.POST.get('From', '')
-        message_body = request.POST.get('Body', '').strip().lower()
+        message_body = request.POST.get('Body', '').strip()
+        
+        print(f"📱 Received message from {from_number}: {message_body}")  # DEBUG
         
         # Extract phone number (remove 'whatsapp:' prefix)
         phone_number = from_number.replace('whatsapp:', '')
         
         # Get or create user
         user, created = EventManagerUser.objects.get_or_create(phone_number=phone_number)
+        if created:
+            print(f"👤 New user created: {phone_number}")
         
         # Process the message
         response_text = process_message(user, message_body)
@@ -38,34 +46,74 @@ def whatsapp_webhook(request):
         return HttpResponse(str(resp), content_type='text/xml')
         
     except Exception as e:
-        print(f"Error processing webhook: {e}")
+        logger.error(f"Error processing webhook: {e}")
         resp = MessagingResponse()
         resp.message("Sorry, I encountered an error. Please try again.")
         return HttpResponse(str(resp), content_type='text/xml')
 
 def process_message(user, message):
     """Process the incoming message and return appropriate response"""
-    message = message.lower().strip()
+    message_lower = message.lower().strip()
+    
+    print(f"🔍 Processing: '{message}' -> '{message_lower}'")  # DEBUG
     
     # Help/Start command
-    if message in ['hi', 'hello', 'hey', 'start', 'help', 'menu']:
+    if message_lower in ['hi', 'hello', 'hey', 'start', 'help', 'menu']:
+        print("✅ Triggered: Main menu")  # DEBUG
         return get_main_menu()
     
     # View upcoming events
-    elif any(keyword in message for keyword in ['events', 'upcoming', 'schedule', 'plans']):
+    elif any(keyword in message_lower for keyword in ['events', 'upcoming', 'schedule', 'plans', 'what do i have']):
+        print("✅ Triggered: View events")  # DEBUG
         return get_upcoming_events(user)
     
     # View today's events
-    elif any(keyword in message for keyword in ['today', "today's", 'agenda']):
+    elif any(keyword in message_lower for keyword in ['today', "today's", 'agenda']):
+        print("✅ Triggered: Today's agenda")  # DEBUG
         return get_todays_events(user)
     
-    # Create event (basic version - we'll enhance with AI later)
-    elif any(keyword in message for keyword in ['create', 'add', 'schedule', 'new event', 'set up']):
-        return "I see you want to create an event. For now, please use the format: 'Meeting with John tomorrow at 3pm'. I'll add AI parsing soon! 🚀"
+    # Cancel or clear state
+    elif any(keyword in message_lower for keyword in ['cancel', 'clear', 'stop']):
+        user.clear_conversation_state()
+        return "✅ Conversation cleared. How can I help you?"
     
-    # Default response
-    else:
-        return "I'm your Event Manager bot! 🤖\n\n" + get_main_menu()
+    # Check if we're in the middle of event creation
+    elif user.current_conversation_state and user.current_conversation_state.get('creating_event'):
+        print("✅ Triggered: Continue event creation")  # DEBUG
+        event_service = EventCreationService(user)
+        return event_service.process_event_creation(message)
+    
+    # 🚨 PERMISSIVE EVENT CREATION DETECTION 🚨
+    # If message contains time/date words, assume it's event creation
+    time_date_words = [
+        'tomorrow', 'today', 'monday', 'tuesday', 'wednesday', 'thursday', 
+        'friday', 'saturday', 'sunday', 'week', 'month', 'year',
+        'at', 'am', 'pm', 'morning', 'afternoon', 'evening', 'night',
+        'january', 'february', 'march', 'april', 'may', 'june', 'july',
+        'august', 'september', 'october', 'november', 'december'
+    ]
+    
+    # Also check for time patterns like "2pm", "3:30", etc.
+    time_pattern = r'\b(\d{1,2}(:\d{2})?\s*(am|pm)?)\b'
+    has_time = re.search(time_pattern, message_lower)
+    
+    has_date_word = any(word in message_lower for word in time_date_words)
+    
+    # If message has time/date reference and is more than 3 words, assume event creation
+    if (has_time or has_date_word) and len(message.split()) >= 3:
+        print(f"✅ Triggering AI event creation: time={has_time}, date_word={has_date_word}")
+        event_service = EventCreationService(user)
+        return event_service.process_event_creation(message)
+    
+    # Also trigger on explicit creation keywords
+    create_keywords = ['create', 'schedule', 'appointment', 'meeting', 'remind', 'set up']
+    if any(keyword in message_lower for keyword in create_keywords):
+        print("✅ Triggering AI via creation keyword")
+        event_service = EventCreationService(user)
+        return event_service.process_event_creation(message)
+    
+    print("❌ No trigger matched, falling back to default")  # DEBUG
+    return "I'm your Event Manager bot! 🤖\n\n" + get_main_menu()
 
 def get_main_menu():
     """Return the main menu message"""
@@ -87,7 +135,7 @@ def get_upcoming_events(user):
     )[:10]  # Limit to 10 events
     
     if not upcoming_events:
-        return "You have no upcoming events! 🎉\n\nUse 'create' to schedule something new."
+        return "You have no upcoming events! 🎉\n\nTry creating one with: 'Team meeting tomorrow at 3pm'"
     
     response = "📅 *Your Upcoming Events:*\n\n"
     for event in upcoming_events:
@@ -95,6 +143,7 @@ def get_upcoming_events(user):
         location_str = f" @ {event.location}" if event.location else ""
         response += f"• *{event.title}*\n  {time_str}{location_str}\n\n"
     
+    response += "To create a new event, just tell me about it! ✨"
     return response
 
 def get_todays_events(user):
@@ -108,7 +157,7 @@ def get_todays_events(user):
     ).order_by('scheduled_time')
     
     if not todays_events:
-        return "No events scheduled for today! 🕶️\n\nEnjoy your free time!"
+        return "No events scheduled for today! 🕶️\n\nEnjoy your free time! You can schedule events with natural language."
     
     response = f"📋 *Today's Agenda ({today.strftime('%A, %b %d')}):*\n\n"
     for event in todays_events:

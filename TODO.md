@@ -1,0 +1,6 @@
+- [x] Update import from google.generativeai to google.genai
+- [x] Change initialization to use genai.Client
+- [x] Update parse_event_message to use client.models.generate_content with config for system_instruction
+- [x] Fix model name to gemini-1.5-flash
+- [x] Update response text extraction
+- [x] Test the refactored code

@@ -1,3 +1,4 @@
+# core/event_creator.py
 from .models import Event, EventManagerUser
 from .ai_service import ai_service
 from django.utils import timezone
@@ -63,6 +64,15 @@ class EventCreationService:
                 # Still need clarification
                 clarification = event_data.get('clarification_question', 
                                              "I'm still not sure. Could you be more specific?")
+                
+                # Update pending event data if AI provided better context
+                self.user.current_conversation_state = {
+                    'creating_event': True,
+                    'pending_event': event_data,
+                    'step': 'clarification'
+                }
+                self.user.save()
+
                 return f"🤔 {clarification}"
         
         # Default: clear state and start over
@@ -76,6 +86,7 @@ class EventCreationService:
             if not event_data.get('title'):
                 return "❌ I couldn't determine the event title. Please try again with a clearer description."
             
+            # In a real-world scenario, you might relax this if the user is just asking for a reminder without a specific time
             if not event_data.get('datetime'):
                 return "❌ I couldn't determine the event time. Please specify when this should happen."
             
@@ -85,16 +96,18 @@ class EventCreationService:
                 title=event_data['title'],
                 scheduled_time=event_data['datetime'],
                 location=event_data.get('location'),
-                notes=event_data.get('notes', '')
+                notes=event_data.get('notes', '') # <-- SAVING NOTES
             )
             
             # Format success message
             time_str = event.scheduled_time.strftime('%A, %b %d at %I:%M %p')
             location_str = f" at {event.location}" if event.location else ""
+            # Display notes if they exist
+            notes_str = f"\n📄 Notes: {event.notes}" if event.notes else ""
             
             return f"✅ *Event Created Successfully!* 🎉\n\n" \
                    f"*{event.title}*\n" \
-                   f"📅 {time_str}{location_str}\n\n" \
+                   f"📅 {time_str}{location_str}{notes_str}\n\n" \
                    f"Use 'events' to see all your upcoming events!"
                    
         except Exception as e:

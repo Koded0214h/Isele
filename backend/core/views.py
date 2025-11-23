@@ -166,3 +166,7 @@ def get_todays_events(user):
         response += f"• *{time_str}* - {event.title}{location_str}\n"
     
     return response
+
+
+def health(request):
+    return JsonResponse({"message" : "Welcome to Isele"})

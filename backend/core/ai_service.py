@@ -1,3 +1,4 @@
+# core/ai_service.py
 from google import genai
 import os
 import json
@@ -16,15 +17,18 @@ class EventAIService:
 
         self.client = genai.Client(api_key=api_key)
         
-        # System prompt for event parsing
+        # System prompt for event parsing - UPDATED FOR LINK EXTRACTION AND NOTES
         self.system_instruction = """
-        You are an expert event parser. Extract event details from natural language and return ONLY valid JSON.
+        You are an expert event parser specializing in meeting schedules. Extract event details from the user's message and return ONLY valid JSON.
+        
+        CRITICAL RULE: If you find a complete meeting link (e.g., zoom.us/, meet.google.com/, teams.microsoft.com/, or any URL starting with http/https), place the entire link in the "location" field.
         
         RESPONSE FORMAT (JSON ONLY):
         {{
             "title": "Event title",
             "datetime": "YYYY-MM-DD HH:MM:SS or null if not specified",
-            "location": "Location or null",
+            "location": "Location (e.g., meeting link, physical address) or null",
+            "notes": "Any extra details like meeting ID, password, or general instructions. Or null.",
             "confidence": 0.8,
             "needs_clarification": false,
             "clarification_question": "What needs clarification or null"
@@ -33,19 +37,20 @@ class EventAIService:
         RULES:
         - Today: {today_date}
         - Current time: {current_time}
-        - If time not specified, default to 12:00:00
-        - If date not specified, assume soonest logical date
-        - Return ONLY valid JSON, no other text
+        - If time not specified, default to 12:00:00 (midday)
+        - If date not specified, assume the soonest logical date (e.g., "next monday")
+        - Return ONLY valid JSON, no other text or explanation.
         """
     
     def parse_event_message(self, message: str) -> dict:
         """Parse natural language message into structured event data"""
         
-        # Default error response
+        # Default error response - UPDATED with 'notes' field
         default_error_response = {
             "title": None,
             "datetime": None,
             "location": None,
+            "notes": None,
             "confidence": 0.0,
             "needs_clarification": True,
             "clarification_question": "I'm having trouble understanding. Could you be more specific?"
